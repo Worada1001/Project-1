@@ -17,11 +17,23 @@ TRANSFER_EVENT_SIGNATURE = web3.keccak(text="Transfer(address,address,uint256)")
 # Function to notify via Slack
 def notify_slack(message):
     payload = {"text": message}
-    requests.post(SLACK_WEBHOOK_URL, json=payload)
+    response = requests.post(SLACK_WEBHOOK_URL, json=payload)
+    if response.status_code != 200:
+        raise ValueError(f"Request to Slack returned an error {response.status_code}, the response is:\n{response.text}")
 
 # Function to monitor transfers to zero address
 def monitor_transfers():
-    usdt_contract = web3.eth.contract(address=USDT_CONTRACT_ADDRESS, abi=[{"anonymous": False, "inputs": [{"indexed": True, "name": "from", "type": "address"}, {"indexed": True, "name": "to", "type": "address"}, {"indexed": False, "name": "value", "type": "uint256"}], "name": "Transfer", "type": "event"}])
+    usdt_contract = web3.eth.contract(address=USDT_CONTRACT_ADDRESS, abi=[{
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "name": "from", "type": "address"},
+            {"indexed": True, "name": "to", "type": "address"},
+            {"indexed": False, "name": "value", "type": "uint256"}
+        ],
+        "name": "Transfer",
+        "type": "event"
+    }])
+    
     filter_params = {
         "fromBlock": "latest",
         "toBlock": "latest",
@@ -30,20 +42,24 @@ def monitor_transfers():
     }
 
     while True:
-        # Check for events
-        events = web3.eth.get_logs(filter_params)
-        for event in events:
-            tx_hash = event['transactionHash'].hex()
-            from_address = event['topics'][1].hex()
-            to_address = web3.toChecksumAddress(event['topics'][2])
-            value = web3.fromWei(int(event['data'], 16), 'ether')
-            
-            if to_address == ZERO_ADDRESS:
-                message = f"USDT Transfer to Zero Address Detected:\nTx Hash: {tx_hash}\nFrom: {from_address}\nValue: {value} USDT"
-                notify_slack(message)
+        try:
+            # Check for events
+            events = web3.eth.get_logs(filter_params)
+            for event in events:
+                tx_hash = event['transactionHash'].hex()
+                from_address = web3.toChecksumAddress(event['topics'][1][-40:])
+                to_address = web3.toChecksumAddress(event['topics'][2][-40:])
+                value = web3.fromWei(int(event['data'], 16), 'ether')
+                
+                if to_address == ZERO_ADDRESS:
+                    message = f"USDT Transfer to Zero Address Detected:\nTx Hash: {tx_hash}\nFrom: {from_address}\nValue: {value} USDT"
+                    notify_slack(message)
 
-        # Wait for a minute before checking again
-        time.sleep(60)
+            # Wait for a minute before checking again
+            time.sleep(60)
+        except Exception as e:
+            print(f"Error occurred: {e}")
+            time.sleep(60)
 
 # Run the monitoring function
 if __name__ == "__main__":
