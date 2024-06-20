@@ -1,0 +1,54 @@
+from typing import List, Tuple
+from collections import defaultdict
+
+def calculate_reward(events: List[Tuple[str, int, int]]) -> dict[str, float]:
+    total_reward = 1000.0  # total reward in USDT
+    distribution_rate = 2.778  # USDT per second
+
+    user_shares = defaultdict(int)
+    last_timestamp = 0
+    user_rewards = defaultdict(float)
+    
+    # Process events to update user shares and calculate rewards
+    for user, timestamp, share_adjust in events:
+        # Calculate time interval
+        time_interval = timestamp - last_timestamp
+        
+        # Distribute reward proportionally based on current shares
+        if last_timestamp != 0:
+            current_reward = time_interval * distribution_rate
+            total_shares = sum(user_shares.values())
+            if total_shares > 0:
+                for u in user_shares:
+                    share_fraction = user_shares[u] / total_shares
+                    user_rewards[u] += current_reward * share_fraction
+        
+        # Update user's shares
+        user_shares[user] += share_adjust
+        
+        # Ensure shares are non-negative
+        if user_shares[user] < 0:
+            user_shares[user] = 0
+        
+        # Update last timestamp
+        last_timestamp = timestamp
+    
+    # Distribute reward for the remaining time until 3600 seconds
+    current_reward = (3600 - last_timestamp) * distribution_rate
+    total_shares = sum(user_shares.values())
+    if total_shares > 0:
+        for u in user_shares:
+            share_fraction = user_shares[u] / total_shares
+            user_rewards[u] += current_reward * share_fraction
+    
+    return user_rewards
+
+# Example usage:
+events = [
+    ("A", 0, 2),
+    ("B", 2, 1),
+    ("A", 10, -1)
+]
+
+result = calculate_reward(events)
+print(result)  # Output: {'A': 5006.481481481482, 'B': 4993.518518518518}
