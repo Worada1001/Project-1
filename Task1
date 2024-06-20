@@ -1,70 +1,50 @@
 from web3 import Web3
 import requests
-import json
 import time
 
-# Connect to Ethereum node using WebSocket for real-time updates
-web3 = Web3(Web3.WebsocketProvider('wss://mainnet.infura.io/ws/v3/YOUR_INFURA_PROJECT_ID'))
+# Configuration
+INFURA_URL = "https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID"
+USDT_CONTRACT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+SLACK_WEBHOOK_URL = "YOUR_SLACK_WEBHOOK_URL"
 
-# USDT contract address and ABI (simplified for Transfer event)
-usdt_address = '0xdAC17F958D2ee523a2206206994597C13D831ec7'
-usdt_abi = '''
-[
-    {
-        "anonymous": false,
-        "inputs": [
-            {"indexed": true, "name": "from", "type": "address"},
-            {"indexed": true, "name": "to", "type": "address"},
-            {"indexed": false, "name": "value", "type": "uint256"}
-        ],
-        "name": "Transfer",
-        "type": "event"
+# Connect to Ethereum node
+web3 = Web3(Web3.HTTPProvider(INFURA_URL))
+
+# USDT Transfer Event Signature
+TRANSFER_EVENT_SIGNATURE = web3.keccak(text="Transfer(address,address,uint256)").hex()
+
+# Function to notify via Slack
+def notify_slack(message):
+    payload = {"text": message}
+    requests.post(SLACK_WEBHOOK_URL, json=payload)
+
+# Function to monitor transfers to zero address
+def monitor_transfers():
+    usdt_contract = web3.eth.contract(address=USDT_CONTRACT_ADDRESS, abi=[{"anonymous": False, "inputs": [{"indexed": True, "name": "from", "type": "address"}, {"indexed": True, "name": "to", "type": "address"}, {"indexed": False, "name": "value", "type": "uint256"}], "name": "Transfer", "type": "event"}])
+    filter_params = {
+        "fromBlock": "latest",
+        "toBlock": "latest",
+        "address": USDT_CONTRACT_ADDRESS,
+        "topics": [TRANSFER_EVENT_SIGNATURE, None, web3.toHex(hexstr=ZERO_ADDRESS)]
     }
-]
-'''
 
-# Set up contract instance
-usdt_contract = web3.eth.contract(address=usdt_address, abi=usdt_abi)
-
-# Filter for Transfer events to the ZERO address
-zero_address = '0x0000000000000000000000000000000000000000'
-
-def handle_event(event):
-    # Parse and log event details
-    event_details = {
-        'transactionHash': event['transactionHash'].hex(),
-        'blockNumber': event['blockNumber'],
-        'from': event['args']['from'],
-        'to': event['args']['to'],
-        'value': event['args']['value']
-    }
-    print(f"Transfer to ZERO address detected: {event_details}")
-    
-    # Send notification
-    send_notification(event_details)
-
-def send_notification(event_details):
-    message = f"USDT transfer detected: {event_details}"
-    # Example using SendGrid to send an email
-    response = requests.post("https://api.sendgrid.com/v3/mail/send", headers={
-        'Authorization': 'Bearer YOUR_SENDGRID_API_KEY',
-        'Content-Type': 'application/json'
-    }, json={
-        "personalizations": [{"to": [{"email": "team@example.com"}]}],
-        "from": {"email": "noreply@example.com"},
-        "subject": "USDT Transfer Alert",
-        "content": [{"type": "text/plain", "value": message}]
-    })
-    return response
-
-def main():
-    # Subscribe to Transfer events
-    event_filter = usdt_contract.events.Transfer.createFilter(fromBlock='latest', argument_filters={'to': zero_address})
-    
     while True:
-        for event in event_filter.get_new_entries():
-            handle_event(event)
-        time.sleep(10)
+        # Check for events
+        events = web3.eth.get_logs(filter_params)
+        for event in events:
+            tx_hash = event['transactionHash'].hex()
+            from_address = event['topics'][1].hex()
+            to_address = web3.toChecksumAddress(event['topics'][2])
+            value = web3.fromWei(int(event['data'], 16), 'ether')
+            
+            if to_address == ZERO_ADDRESS:
+                message = f"USDT Transfer to Zero Address Detected:\nTx Hash: {tx_hash}\nFrom: {from_address}\nValue: {value} USDT"
+                notify_slack(message)
 
-if _name_ == "_main_":
-    main()
+        # Wait for a minute before checking again
+        time.sleep(60)
+
+# Run the monitoring function
+if __name__ == "__main__":
+    monitor_transfers()
